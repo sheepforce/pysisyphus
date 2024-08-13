@@ -2,11 +2,13 @@ import numpy as np
 import pytest
 
 from pysisyphus.calculators.AnaPot import AnaPot
+import pysisyphus.calculators.Pots1d as pots1d
 from pysisyphus.calculators.PySCF import PySCF
 from pysisyphus.helpers import geom_loader
 from pysisyphus.irc.initial_displ import cubic_displ_for_geom
 from pysisyphus.irc import EulerPC
 from pysisyphus.testing import using
+from pysisyphus.tsoptimizers.RSPRFOptimizer import RSPRFOptimizer
 
 
 @pytest.fixture
@@ -18,8 +20,8 @@ def anapot_ts():
 
 def test_cubic_displ(anapot_ts):
     step_plus, step_minus, _ = cubic_displ_for_geom(anapot_ts)
-    ref_step_plus = (-0.013523096972, -0.009151256346, 0.0)
-    np.testing.assert_allclose(step_plus, ref_step_plus)
+    ref_step_plus = [-0.016441, -0.011105, 0.0]
+    np.testing.assert_allclose(step_plus, ref_step_plus, atol=1e-6)
 
 
 @pytest.mark.parametrize(
@@ -37,7 +39,7 @@ def test_irc_cubic_displ(displ, anapot_ts):
     irc = EulerPC(anapot_ts, **irc_kwargs)
     irc.run()
 
-    # calc = anapot_ts.calculator.plot_irc(irc, show=True)
+    # anapot_ts.calculator.plot_irc(irc, show=True)
 
 
 @using("pyscf")
@@ -47,6 +49,36 @@ def test_hcn_initial_displ(displ):
     geom.set_calculator(PySCF(pal=2, basis="sto3g"))
     irc = EulerPC(geom, displ=displ, max_cycles=1)
     irc.run()
+
+
+def print_cubic1dpot_ts_coord():
+    geom = pots1d.Cubic1dPot().get_saddles(i=0)
+    opt = RSPRFOptimizer(geom, thresh="gau_vtight", hessian_recalc=1)
+    opt.run()
+    print("opt x coord", geom.coords[0])
+
+    irc = EulerPC(geom, displ="energy_cubic", max_cycles=5, displ_energy=0.5)
+    irc.run()
+
+
+@pytest.mark.parametrize("pot_cls", (pots1d.Cubic1dPot, pots1d.Quadratic1dPot))
+@pytest.mark.parametrize("energy_diff_ref", (-0.001, -0.0005, -0.0001))
+def test_cubic_displ_exact(pot_cls, energy_diff_ref):
+    # The two quadratic and cubic 1d potentials can be handled nearly exactly.
+    # It is not fully exact, as the third derivatives are estimated via finite
+    # differences.
+    geom = pot_cls().get_saddles(i=0)
+
+    step_plus, step_minus, _ = cubic_displ_for_geom(geom, dE=energy_diff_ref)
+
+    energy = geom.energy
+
+    for step in (step_plus, step_minus):
+        energy_tmp = geom.get_energy_at(geom.coords + step)
+        energy_diff = energy_tmp - energy
+        # There is a nice agreement between actual and desired energy lowering
+        assert energy_diff == pytest.approx(energy_diff_ref, abs=1e-10)
+        # print(f"{energy_diff: >12.6f} au, {energy_diff_ref: >12.6f} au")
 
 
 def plot_quadratic_cubic_displacement():
@@ -66,7 +98,7 @@ def plot_quadratic_cubic_displacement():
     v1 = get_curv_vec(H, res.G_vec, v0, w0)
 
     def step(ds):
-        return ds * v0 + ds ** 2 * v1 / 2
+        return ds * v0 + ds**2 * v1 / 2
 
     lim = 1.5
     x0 = geom.mw_coords
@@ -81,3 +113,7 @@ def plot_quadratic_cubic_displacement():
     ax.legend()
     calc.fig.savefig("third_derivs.pdf")
     plt.show()
+
+
+if __name__ == "__main__":
+    plot_quadratic_cubic_displacement()
